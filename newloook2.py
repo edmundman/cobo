@@ -506,11 +506,6 @@ def show_chart_previews(json_data):
 def main():
     display_logo()
     st.markdown('<h1 class="main-title">Let’s create your presentation</h1>', unsafe_allow_html=True)
-    st.markdown("""
-        <div class="intro-text">
-            Peel back the complexity, let your research speak to everyone.
-        </div>
-    """, unsafe_allow_html=True)
 
     # Session states
     if "json_data" not in st.session_state:
