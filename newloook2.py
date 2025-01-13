@@ -173,7 +173,7 @@ def fig_to_image_stream(fig):
 # Load environment variables
 load_dotenv()
 
-st.set_page_config(page_title="PDF to PowerPoint Generator", layout="wide")
+st.set_page_config(page_title="Let’s create your presentation", layout="wide")
 
 api_key = os.getenv("ANTHROPIC_API_KEY")
 if not api_key:
@@ -570,10 +570,6 @@ def main():
             st.session_state.json_data,
             st.session_state.current_section
         )
-
-        # Optionally show entire JSON (including CHARTS)
-        if st.checkbox("Show Current JSON Data"):
-            st.json(st.session_state.json_data)
 
         # Let user preview charts in Streamlit
         if st.checkbox("Show Chart Previews"):
