@@ -246,7 +246,7 @@ def generate_json_using_claude(prompt, pdf_bytes, simplification_level, progress
 
     try:
         if progress_callback:
-            progress_callback("Sending request to Claude...", 10)
+            progress_callback("Information peeling", 10)
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=8192,
@@ -254,7 +254,7 @@ def generate_json_using_claude(prompt, pdf_bytes, simplification_level, progress
         )
 
         if progress_callback:
-            progress_callback("Processing response...", 70)
+            progress_callback("Information peeling.", 70)
 
         assistant_reply = response.content[0].text
         json_output_pattern = r"<json_output>\s*(\{.*?\})\s*</json_output>"
@@ -537,8 +537,8 @@ def main():
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
 
-        if st.button("Extract and Generate JSON"):
-            with st.spinner("Processing PDF..."):
+        if st.button("Let’s Peel"):
+            with st.spinner("Information peeling"):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
