@@ -1,7 +1,7 @@
 [theme]
 base="light"
-primaryColor = "#e7fd7d"  # Yellow
+primaryColor = "#FFFFFF"  # white
 backgroundColor = "#544ff0"  # Purple
 secondaryBackgroundColor = "#3c37ed"  # Purple
-textColor = "#e7fd7d"  # White
+textColor = "#e7fd7d"  # Yellow
 font = "sans serif"
