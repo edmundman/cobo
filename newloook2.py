@@ -1,6 +1,9 @@
 import streamlit as st
 from pptx import Presentation
-from pptx.util import Inches
+from pptx.util import Inches, Pt
+from pptx.chart.data import ChartData, CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_DATA_LABEL_POSITION
+from pptx.dml.color import RGBColor
 from io import BytesIO
 import anthropic
 import base64
@@ -9,171 +12,11 @@ import fitz
 from dotenv import load_dotenv
 import os
 import re
-
-# ------ GRAPH MAKER IMPORTS ------
-import matplotlib
-matplotlib.use("Agg")  # Needed for Streamlit / headless environments
 import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
 
-# ---------------- GRAPH MAKER FUNCTIONS ----------------
-
-def create_percentage_donut(percentage, title, colors=('#2596be', '#f0f0f0')):
-    fig, ax = plt.subplots()
-    ax.pie(
-        [percentage, 100 - percentage],
-        colors=colors,
-        startangle=90,
-        counterclock=False,
-        wedgeprops={'width': 0.3, 'edgecolor': 'white'}
-    )
-    ax.text(
-        0, 0, f'{percentage}%',
-        horizontalalignment='center',
-        verticalalignment='center',
-        fontsize=24,
-        fontweight='bold'
-    )
-    ax.text(
-        0, -0.1, title,
-        horizontalalignment='center',
-        fontsize=12,
-        wrap=True,
-        transform=ax.transAxes
-    )
-    ax.set(aspect="equal")
-    plt.tight_layout()
-    return fig, ax
-
-def create_patient_count_visualization(count, title, icons_per_row=35):
-    fig, ax = plt.subplots()
-    rows = int(np.ceil(count / icons_per_row))
-    x_coords = []
-    y_coords = []
-    for i in range(count):
-        row = i // icons_per_row
-        col = i % icons_per_row
-        x_coords.append(col)
-        y_coords.append(-row)
-    ax.plot(
-        x_coords,
-        y_coords,
-        linestyle='none',
-        marker='$\\bigodot$',
-        markersize=12,
-        color='#2596be',
-        markeredgewidth=0
-    )
-    ax.text(
-        icons_per_row / 2,
-        1,
-        str(count),
-        horizontalalignment='center',
-        verticalalignment='bottom',
-        fontsize=36,
-        fontweight='bold'
-    )
-    ax.text(
-        icons_per_row / 2,
-        0.6,
-        title,
-        horizontalalignment='center',
-        verticalalignment='top',
-        fontsize=14,
-        color='#2596be'
-    )
-    ax.set_xlim(-1, icons_per_row + 1)
-    ax.set_ylim(-rows - 1, 2)
-    ax.axis('off')
-    plt.tight_layout()
-    return fig, ax
-
-def create_comparison_bars(values, labels, title, color='#2596be'):
-    fig, ax = plt.subplots()
-    y_pos = np.arange(len(values))
-    ax.barh(y_pos, values, height=0.6, color=color)
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels)
-    ax.set_xlabel('Value')
-    ax.set_title(title, pad=15, fontsize=14)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    plt.tight_layout()
-    return fig, ax
-
-def create_trend_line(values, dates, title, color='#2596be'):
-    fig, ax = plt.subplots()
-    ax.plot(
-        dates,
-        values,
-        color=color,
-        linewidth=2,
-        marker='o',
-        markersize=6,
-        markerfacecolor='white',
-        markeredgewidth=2
-    )
-    ax.grid(True, linestyle='--', alpha=0.7)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.set_title(title, pad=15, fontsize=14)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    return fig, ax
-
-def create_stacked_percentage(categories, percentages, title, colors=None):
-    fig, ax = plt.subplots()
-    if colors is None:
-        colors = ['#2596be', '#1a7fa3', '#0f6788', '#044e6d', '#003652']
-        colors = colors[:len(categories)]
-    left = 0
-    for i, percentage in enumerate(percentages):
-        ax.barh(
-            0,
-            percentage,
-            left=left,
-            height=0.5,
-            color=colors[i],
-            label=f'{categories[i]} ({percentage}%)'
-        )
-        if percentage > 5:
-            ax.text(
-                left + percentage / 2,
-                0,
-                f'{percentage}%',
-                horizontalalignment='center',
-                verticalalignment='center',
-                color='white',
-                fontweight='bold'
-            )
-        left += percentage
-    ax.set_xlim(0, 100)
-    ax.set_ylim(-0.6, 0.6)
-    ax.set_title(title, pad=15, fontsize=14)
-    ax.axis('off')
-    ax.legend(
-        bbox_to_anchor=(0.5, -0.5),
-        loc='upper center',
-        ncol=len(categories),
-        frameon=False
-    )
-    plt.tight_layout()
-    return fig, ax
-
-def fig_to_image_stream(fig):
-    img_stream = BytesIO()
-    fig.savefig(img_stream, format='png', bbox_inches='tight')
-    plt.close(fig)
-    img_stream.seek(0)
-    return img_stream
-
-# ---------------- END GRAPH MAKER FUNCTIONS ----------------
-
-# Load environment variables
+# -------------------- BEGIN: SETUP --------------------
 load_dotenv()
-
-st.set_page_config(page_title="Let’s create your presentation", layout="wide")
+st.set_page_config(page_title="Let’s Create Your Presentation", layout="wide")
 
 api_key = os.getenv("ANTHROPIC_API_KEY")
 if not api_key:
@@ -182,16 +25,35 @@ if not api_key:
 
 client = anthropic.Anthropic(
     api_key=api_key,
-    default_headers={
-        "anthropic-beta": "pdfs-2024-09-25"
-    }
+    default_headers={"anthropic-beta": "pdfs-2024-09-25"}
 )
 
 # Model Name
-MODEL_NAME = "claude-3-5-sonnet-20241022"  # <-- as requested
+MODEL_NAME = "claude-3-5-sonnet-20241022"  # <-- your custom model name
+GRAPH_PROMPT_PATH = "graphprompt2.txt"     # <-- your prompt file
+TEMPLATE_PATH = "Template.pptx"            # <-- your PPT template
 
-GRAPH_PROMPT_PATH = "prompt2.txt"  # <-- your prompt file
+# -------------------- Color Palette for Charts --------------------
+# Define colors as tuples first for easy conversion
+COLOR_VALUES = {
+    'primary': (42, 169, 224),     # Light blue #2AA9E0
+    'secondary': (10, 75, 117),    # Dark blue #0A4B75
+    'accent1': (255, 89, 94),      # Coral red
+    'accent2': (86, 204, 157),     # Mint green
+    'accent3': (255, 202, 58)      # Yellow
+}
 
+# Create PPTX colors
+COLORS_PPTX = {
+    key: RGBColor(*rgb) for key, rgb in COLOR_VALUES.items()
+}
+
+# Create matplotlib colors
+COLORS_MPL = [
+    '#{:02x}{:02x}{:02x}'.format(r, g, b) for r, g, b in COLOR_VALUES.values()
+]
+
+# -------------------- HELPER FUNCTIONS --------------------
 @st.cache_resource
 def load_prompt_text(prompt_path):
     with open(prompt_path, "r") as file:
@@ -247,6 +109,7 @@ def generate_json_using_claude(prompt, pdf_bytes, simplification_level, progress
     try:
         if progress_callback:
             progress_callback("Information peeling", 10)
+
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=8192,
@@ -254,42 +117,29 @@ def generate_json_using_claude(prompt, pdf_bytes, simplification_level, progress
         )
 
         if progress_callback:
-            progress_callback("Information peeling.", 70)
+            progress_callback("Information peeling...", 70)
 
         assistant_reply = response.content[0].text
+        print(assistant_reply)
         json_output_pattern = r"<json_output>\s*(\{.*?\})\s*</json_output>"
         match = re.search(json_output_pattern, assistant_reply, re.DOTALL)
 
         if match:
             json_string = match.group(1)
             json_data = json.loads(json_string)
-            
-            # Ensure exactly three charts
-            charts = json_data.get("CHARTS", [])
-            if len(charts) < 3:
-                # Fill with None or default charts if fewer than 3
-                for _ in range(3 - len(charts)):
-                    charts.append(None)
-            elif len(charts) > 3:
-                charts = charts[:3]
-            json_data["CHARTS"] = charts
-
-            return json_data
         else:
             try:
                 json_data = json.loads(assistant_reply)
-                # Ensure exactly three charts
-                charts = json_data.get("CHARTS", [])
-                if len(charts) < 3:
-                    for _ in range(3 - len(charts)):
-                        charts.append(None)
-                elif len(charts) > 3:
-                    charts = charts[:3]
-                json_data["CHARTS"] = charts
-                return json_data
             except json.JSONDecodeError:
                 st.error("Failed to find or parse JSON output in the response.")
                 return {}
+
+        # Optional: Validate and adjust the number of charts as needed
+        charts = json_data.get("CHARTS", [])
+        json_data["CHARTS"] = charts  # No padding/trimming; handle dynamically
+
+        return json_data
+
     except Exception as e:
         st.error(f"Error communicating with Claude: {e}")
         return {}
@@ -297,11 +147,230 @@ def generate_json_using_claude(prompt, pdf_bytes, simplification_level, progress
         if progress_callback:
             progress_callback("Completed.", 100)
 
+@st.cache_resource
+def load_ppt_template(template_path):
+    return Presentation(template_path)
+
+def _apply_common_chart_style(chart, title=None, text_color=RGBColor(0, 0, 0)):
+    """Apply consistent styling to a python-pptx chart."""
+    # Chart title
+    if title:
+        chart.has_title = True
+        chart.chart_title.text_frame.text = title
+        title_fmt = chart.chart_title.text_frame.paragraphs[0].font
+        title_fmt.size = Pt(14)
+        title_fmt.name = "Calibri"
+        title_fmt.color.rgb = text_color  # Set title color
+
+    # Legend
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+    chart.legend.include_in_layout = False
+
+def _add_donut_chart(slide, left, top, width, height, chart_title, data, text_color=RGBColor(0, 0, 0)):
+    """Add donut chart at specified position using python-pptx."""
+    # Check if data is a list of dicts with 'category' and 'value'
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        categories = [item.get("category", "") for item in data]
+        values = [item.get("value", 0) for item in data]
+    else:
+        print("Invalid data format for donut chart. Expected a list of dictionaries with 'category' and 'value' keys.")
+        # Provide default data to prevent crash
+        categories = ["Default Category"]
+        values = [100]
+    
+    chart_data = ChartData()
+    chart_data.categories = categories
+    chart_data.add_series("Series 1", values)
+    
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.DOUGHNUT,
+        left, top, width, height,
+        chart_data
+    ).chart
+    
+    # Make donut hole bigger
+    chart.plots[0].donut_hole_size = 60
+    
+    # Color slices
+    series = chart.series[0]
+    for idx, point in enumerate(series.points):
+        point.format.fill.solid()
+        # Cycle through colors if more points than colors
+        color_key = list(COLORS_PPTX.keys())[idx % len(COLORS_PPTX)]
+        point.format.fill.fore_color.rgb = COLORS_PPTX[color_key]
+    
+    # Data labels
+    chart.plots[0].has_data_labels = True
+    data_labels = chart.plots[0].data_labels
+    data_labels.font.size = Pt(12)
+    data_labels.font.bold = True
+    data_labels.number_format = '0"%"'
+    data_labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
+    data_labels.font.color.rgb = text_color  # Set data label color
+    
+    _apply_common_chart_style(chart, chart_title, text_color)
+
+def _add_comparison_bars_chart(slide, left, top, width, height, chart_title, data, horizontal=False, text_color=RGBColor(0, 0, 0)):
+    """
+    Add a comparison bar chart (horizontal or vertical).
+    Expecting data as { "labels": [...], "values": [...] } in your JSON.
+    """
+    values = data.get("values", [])
+    labels = data.get("labels", [])
+    if len(values) != len(labels):
+        print("Bar chart data mismatch: values and labels must be the same length.")
+        return
+
+    # Build pairs
+    pairs = list(zip(labels, values))
+
+    chart_data = CategoryChartData()
+    chart_data.categories = [p[0] for p in pairs]
+    chart_data.add_series("Series 1", [p[1] for p in pairs])
+
+    chart_type = XL_CHART_TYPE.BAR_CLUSTERED if horizontal else XL_CHART_TYPE.COLUMN_CLUSTERED
+    chart = slide.shapes.add_chart(
+        chart_type,
+        left, top, width, height,
+        chart_data
+    ).chart
+
+    # Format series
+    series = chart.series[0]
+    series.format.fill.solid()
+    series.format.fill.fore_color.rgb = COLORS_PPTX["primary"]
+
+    # Data labels
+    series.has_data_labels = True
+    data_labels = series.data_labels
+    data_labels.font.size = Pt(12)
+    data_labels.font.color.rgb = text_color  # Set data label color
+    data_labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
+
+    _apply_common_chart_style(chart, chart_title, text_color)
+
+def _add_patient_count_display(slide, left, top, width, height, chart_title, data, text_color=RGBColor(0, 0, 0)):
+    """Display patient count as a prominent text box."""
+    count = data.get("count", 0)
+
+    # Add a text box to display the count
+    txBox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = True
+
+    # Chart Title
+    p = tf.paragraphs[0]
+    run = p.add_run()
+    run.text = chart_title + "\n"
+    run.font.size = Pt(14)
+    run.font.bold = True
+    run.font.color.rgb = text_color  # Set title color
+
+    # Count
+    p = tf.add_paragraph()
+    run = p.add_run()
+    run.text = str(count)
+    run.font.size = Pt(36)
+    run.font.bold = True
+    run.font.color.rgb = COLORS_PPTX["primary"]
+
+def _add_line_chart(slide, left, top, width, height, chart_title, data, text_color=RGBColor(0, 0, 0)):
+    """
+    Add a line chart.
+    Expecting data as { "values": [...], "dates": [...] } in your JSON.
+    We treat dates as categories for simplicity.
+    """
+    values = data.get("values", [])
+    dates = data.get("dates", [])
+    if len(values) != len(dates):
+        print("Line chart data mismatch: 'values' and 'dates' must be the same length.")
+        return
+
+    pairs = list(zip(dates, values))
+
+    chart_data = CategoryChartData()
+    chart_data.categories = [p[0] for p in pairs]
+    chart_data.add_series("Series 1", [p[1] for p in pairs])
+
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.LINE_MARKERS,  # or XL_CHART_TYPE.LINE
+        left, top, width, height,
+        chart_data
+    ).chart
+
+    # Format series
+    series = chart.series[0]
+    series.format.line.color.rgb = COLORS_PPTX["primary"]
+    # Marker style (if desired)
+    series.marker.format.fill.solid()
+    series.marker.format.fill.fore_color.rgb = COLORS_PPTX["primary"]
+    series.marker.size = 7
+
+    # Data labels
+    series.has_data_labels = True
+    data_labels = series.data_labels
+    data_labels.font.size = Pt(12)
+    data_labels.font.color.rgb = text_color  # Set data label color
+    data_labels.position = XL_DATA_LABEL_POSITION.ABOVE
+
+    _apply_common_chart_style(chart, chart_title, text_color)
+
+def _add_stacked_percentage_chart(slide, left, top, width, height, chart_title, data, text_color=RGBColor(0, 0, 0)):
+    """
+    Add a stacked percentage chart.
+    Expecting data as { "categories": [...], "percentages": [...] }
+    """
+    categories = data.get("categories", [])
+    percentages = data.get("percentages", [])
+
+    if len(categories) != len(percentages):
+        print("Stacked percentage chart data mismatch: 'categories' and 'percentages' must be the same length.")
+        # Provide default data to prevent crash
+        categories = ["Default Category"]
+        percentages = [100]
+
+    # Create stacked percentage chart data
+    chart_data = CategoryChartData()
+    chart_data.categories = categories
+    chart_data.add_series("Series 1", percentages)
+
+    # Since python-pptx doesn't support stacked percentage charts directly,
+    # we'll use a pie chart as a placeholder.
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.PIE,
+        left, top, width, height,
+        chart_data
+    ).chart
+
+    # Apply desired formatting for stacked percentage
+    chart.has_title = True
+    chart.chart_title.text_frame.text = chart_title
+    chart.chart_title.text_frame.paragraphs[0].font.size = Pt(14)
+    chart.chart_title.text_frame.paragraphs[0].font.name = "Calibri"
+    chart.chart_title.text_frame.paragraphs[0].font.color.rgb = text_color  # Set title color
+
+    # Color slices
+    series = chart.series[0]
+    for idx, point in enumerate(series.points):
+        point.format.fill.solid()
+        color_key = list(COLORS_PPTX.keys())[idx % len(COLORS_PPTX)]
+        point.format.fill.fore_color.rgb = COLORS_PPTX[color_key]
+
+    # Data labels
+    chart.plots[0].has_data_labels = True
+    data_labels = chart.plots[0].data_labels
+    data_labels.font.size = Pt(12)
+    data_labels.font.bold = True
+    data_labels.number_format = '0"%"'
+    data_labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
+    data_labels.font.color.rgb = text_color  # Set data label color
+
+    _apply_common_chart_style(chart, chart_title, text_color)
+
 def populate_ppt_template(json_data, prs):
     """
-    Insert text into existing slides placeholders AND replace graph placeholders with charts.
-    This function dynamically detects graph placeholders, retrieves their dimensions,
-    generates charts accordingly, and inserts them into the placeholders.
+    Insert text into existing slides placeholders AND replace graph placeholders with python-pptx charts.
     """
     # 1) Insert text into placeholders
     for slide_number, slide in enumerate(prs.slides, start=1):
@@ -317,6 +386,7 @@ def populate_ppt_template(json_data, prs):
                         run.text = run.text.replace("(Background_Info)", json_data.get("Background_Info", ""))
                         run.text = run.text.replace("(Patient Quote)", json_data.get("Patient_Quote", ""))
                         run.text = run.text.replace("(Patient name)", json_data.get("Patient_Name", ""))
+                        run.text = run.text.replace("(Date)", json_data.get("Date", ""))
                         run.text = run.text.replace("(AIMS)", "\n".join(json_data.get("AIMS", [])))
                         run.text = run.text.replace("(Methods)", json_data.get("Methods", ""))
                         run.text = run.text.replace("(Findings)", "\n".join(json_data.get("Findings", [])))
@@ -326,186 +396,307 @@ def populate_ppt_template(json_data, prs):
     # 2) Replace graph placeholders with charts
     charts_list = json_data.get("CHARTS", [])
     if not charts_list:
-        st.warning("No charts found in JSON data.")
+        print("No charts found in JSON data.")
         return
 
-    # Extract all graph placeholders across all slides
-    graph_placeholders = []
+    # Extract all 'graph_' placeholders across all slides and group them by name
+    placeholder_dict = {}
     for slide in prs.slides:
         for shape in slide.shapes:
             if shape.name.startswith("graph_"):
-                graph_placeholders.append(shape)
+                if shape.name not in placeholder_dict:
+                    placeholder_dict[shape.name] = []
+                placeholder_dict[shape.name].append(shape)
 
-    num_placeholders = len(graph_placeholders)
-    num_charts = len(charts_list)
+    # Determine the total number of placeholders and sort them
+    total_placeholders = sorted(placeholder_dict.keys(), key=lambda x: int(x.split('_')[1]))
 
-    if num_charts < num_placeholders:
-        st.warning(f"Number of charts ({num_charts}) is less than the number of placeholders ({num_placeholders}). Some placeholders will remain empty.")
-    elif num_charts > num_placeholders:
-        st.warning(f"Number of charts ({num_charts}) is greater than the number of placeholders ({num_placeholders}). Extra charts will be ignored.")
-
-    # Determine the number of charts to process
-    num_to_process = min(num_charts, num_placeholders)
-
-    for idx in range(num_to_process):
-        chart_info = charts_list[idx]
-        placeholder_shape = graph_placeholders[idx]
-        placeholder_name = placeholder_shape.name
-
-        if not chart_info:
-            st.warning(f"Chart #{idx+1} data is missing. Placeholder '{placeholder_name}' will not be replaced.")
-            continue  # Skip if no chart info
-
-        chart_type = chart_info.get("chart_type", "")
-        chart_title = chart_info.get("chart_title", "")
-        data = chart_info.get("data", {})
-
-        fig, ax = None, None
-        if chart_type == "donut":
-            percentage = data.get("percentage", 50)
-            fig, ax = create_percentage_donut(percentage, chart_title)
-        elif chart_type == "patient_count":
-            count = data.get("count", 0)
-            fig, ax = create_patient_count_visualization(count, chart_title)
-        elif chart_type == "comparison_bars":
-            values = data.get("values", [])
-            labels = data.get("labels", [])
-            fig, ax = create_comparison_bars(values, labels, chart_title)
-        elif chart_type == "trend_line":
-            values = data.get("values", [])
-            dates = data.get("dates", [])
-            fig, ax = create_trend_line(values, dates, chart_title)
-        elif chart_type == "stacked_percentage":
-            categories = data.get("categories", [])
-            percentages = data.get("percentages", [])
-            fig, ax = create_stacked_percentage(categories, percentages, chart_title)
+    # Iterate over placeholders and assign charts
+    for idx, placeholder_name in enumerate(total_placeholders, start=1):
+        # Determine which chart to use
+        if idx <= len(charts_list):
+            chart_info = charts_list[idx - 1]
+        elif len(charts_list) >= 2:
+            chart_info = charts_list[1]  # Use Chart 2 as replacement
+        elif len(charts_list) >=1:
+            chart_info = charts_list[0]  # Use Chart 1 as fallback
         else:
-            st.warning(f"Chart type '{chart_type}' is not recognized. Skipping chart #{idx+1}.")
+            print(f"No charts available to replace placeholder '{placeholder_name}'.")
             continue
 
-        if fig:
-            # Retrieve placeholder dimensions in inches
-            width_in = placeholder_shape.width.inches
-            height_in = placeholder_shape.height.inches
+        # Get all shapes with this placeholder name
+        shapes = placeholder_dict[placeholder_name]
+        for shape in shapes:
+            # Get slide and position information from the shape
+            slide = shape.part.slide
+            left = shape.left
+            top = shape.top
+            width = shape.width
+            height = shape.height
+            chart_title = chart_info.get("chart_title", "")
+            data = chart_info.get("data", {})
 
-            # Adjust the figure size to match placeholder dimensions
-            fig.set_size_inches(width_in, height_in)
+            # Determine the slide number
+            slide_number = prs.slides.index(slide) + 1
 
-            # Save the figure to an image stream
-            pic_stream = fig_to_image_stream(fig)
+            # Set text color based on slide number (white for slide 7)
+            if slide_number == 7:
+                text_color = RGBColor(255, 255, 255)  # White
+            else:
+                text_color = RGBColor(0, 0, 0)        # Black
 
-            # Insert the image into the slide
-            slide = placeholder_shape.part.slide
-            left = placeholder_shape.left
-            top = placeholder_shape.top
-            width = placeholder_shape.width
-            height = placeholder_shape.height
-
-            # Add the picture
-            pic = slide.shapes.add_picture(pic_stream, left, top, width=width, height=height)
-
-            # Remove the placeholder shape
-            sp = placeholder_shape._element
+            # Remove the old placeholder shape
+            sp = shape._element
             sp.getparent().remove(sp)
 
-            st.info(f"Replaced placeholder '{placeholder_name}' with chart #{idx+1}: {chart_type}")
+            # Now add the new chart based on chart_type
+            chart_type = chart_info.get("chart_type", "")
+            if chart_type == "donut":
+                _add_donut_chart(slide, left, top, width, height, chart_title, data, text_color)
+                print(f"Replaced placeholder '{placeholder_name}' with Chart #{idx}: Donut Chart")
+            elif chart_type == "comparison_bars":
+                _add_comparison_bars_chart(slide, left, top, width, height, chart_title, data, horizontal=False, text_color=text_color)
+                print(f"Replaced placeholder '{placeholder_name}' with Chart #{idx}: Comparison Bars Chart")
+            elif chart_type == "trend_line":
+                _add_line_chart(slide, left, top, width, height, chart_title, data, text_color)
+                print(f"Replaced placeholder '{placeholder_name}' with Chart #{idx}: Line Chart")
+            elif chart_type == "stacked_percentage":
+                _add_stacked_percentage_chart(slide, left, top, width, height, chart_title, data, text_color)
+                print(f"Replaced placeholder '{placeholder_name}' with Chart #{idx}: Stacked Percentage Chart")
+            elif chart_type == "patient_count":
+                _add_patient_count_display(slide, left, top, width, height, chart_title, data, text_color)
+                print(f"Replaced placeholder '{placeholder_name}' with Chart #{idx}: Patient Count Display")
+            else:
+                print(f"Chart type '{chart_type}' is not currently supported. Placeholder '{placeholder_name}' remains unused.")
 
-            # Close the figure to free memory
-            plt.close(fig)
-
-    # Handle any extra charts (if charts > placeholders)
+    # Handle any extra charts without corresponding placeholders
+    num_placeholders = len(placeholder_dict)
+    num_charts = len(charts_list)
     if num_charts > num_placeholders:
         for idx in range(num_placeholders, num_charts):
-            st.warning(f"Chart #{idx+1} has no corresponding placeholder and will be ignored.")
+            print(f"Chart #{idx + 1} has no corresponding placeholder and will be ignored.")
 
+    # Return the final PPT as a stream
     ppt_stream = BytesIO()
     prs.save(ppt_stream)
     ppt_stream.seek(0)
     return ppt_stream
 
 def edit_json_section(json_data, section_name):
-    # Let user edit each section in Streamlit
-    if section_name == "Paper Information":
+    """Let user edit each JSON section in Streamlit."""
+    if section_name == "Page 1: Title and Author Names":
+        st.header("Page 1: Title and Author Names")
         st.text_input("Title", value=json_data.get("Title", ""), key="title")
         authors_str = ", ".join(json_data.get("AUTHOR_NAMES", []))
         authors_str = st.text_input("Authors (comma-separated)", value=authors_str, key="authors")
-        st.text_input("PMID", value=json_data.get("PAPER_PMID", ""), key="pmid")
         st.text_input("DOI", value=json_data.get("PAPER_DOI", ""), key="doi")
 
         json_data["Title"] = st.session_state.title
         json_data["AUTHOR_NAMES"] = [a.strip() for a in st.session_state.authors.split(",") if a.strip()]
-        json_data["PAPER_PMID"] = st.session_state.pmid
         json_data["PAPER_DOI"] = st.session_state.doi
 
-    elif section_name == "Background":
+    elif section_name == "Page 2: Background":
+        st.header("Page 2: Background")
         st.text_area("Background Info", value=json_data.get("Background_Info", ""), key="background")
         json_data["Background_Info"] = st.session_state.background
 
-    elif section_name == "Patient Information":
+    elif section_name == "Page 3: Patient Quote":
+        st.header("Page 3: Patient Quote")
         st.text_area("Patient Quote", value=json_data.get("Patient_Quote", ""), key="patient_quote")
         st.text_input("Patient Name", value=json_data.get("Patient_Name", ""), key="patient_name")
         json_data["Patient_Quote"] = st.session_state.patient_quote
         json_data["Patient_Name"] = st.session_state.patient_name
 
-    elif section_name == "Research Details":
-        st.text_area("Aims (one per line)", value="\n".join(json_data.get("AIMS", [])), key="aims")
-        st.text_area("Methods", value=json_data.get("Methods", ""), key="methods")
-        st.text_area("Findings (one per line)", value="\n".join(json_data.get("Findings", [])), key="findings")
-        st.text_area("Conclusion", value=json_data.get("Conclusion", ""), key="conclusion")
+    elif section_name == "Page 4: Key Statistics":
+        st.header("Page 4: Key Statistics")
+        charts = json_data.get("CHARTS", [])
+        for idx, chart in enumerate(charts, start=1):
+            chart_title = chart.get("chart_title", f"Chart {idx}")
+            chart_type = chart.get("chart_type", "unknown")
+            st.subheader(f"Graph {idx}: {chart_title} ({chart_type})")
 
+            if chart_type == "donut":
+                st.markdown(f"**{chart_title}**")
+                categories = []
+                values = []
+                for item in chart.get("data", []):
+                    category = st.text_input(f"Category {item.get('category', '')}", value=item.get('category', ""), key=f"graph_{idx}_category_{item.get('category', '')}")
+                    value = st.number_input(
+                        f"Value for {category}",
+                        value=float(item.get('value', 0.0)),
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.1,
+                        key=f"graph_{idx}_value_{item.get('category', '')}"
+                    )
+                    categories.append(category)
+                    values.append(value)
+                # Update chart data
+                json_data["CHARTS"][idx - 1]["data"] = [{"category": c, "value": v} for c, v in zip(categories, values)]
+
+            elif chart_type == "comparison_bars":
+                st.markdown(f"**{chart_title}**")
+                labels = []
+                values = []
+                for label, value in zip(chart.get("data", {}).get("labels", []), chart.get("data", {}).get("values", [])):
+                    new_label = st.text_input(f"Label for {label}", value=label, key=f"graph_{idx}_label_{label}")
+                    new_value = st.number_input(
+                        f"Value for {new_label}",
+                        value=float(value),
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.1,
+                        key=f"graph_{idx}_value_{label}"
+                    )
+                    labels.append(new_label)
+                    values.append(new_value)
+                # Update chart data
+                json_data["CHARTS"][idx - 1]["data"] = {
+                    "labels": labels,
+                    "values": values
+                }
+
+            elif chart_type == "patient_count":
+                st.markdown(f"**{chart_title}**")
+                count = st.number_input(
+                    f"Count for {chart_title}",
+                    value=int(chart.get("data", {}).get("count", 0)),
+                    min_value=0,
+                    step=1,
+                    key=f"graph_{idx}_count"
+                )
+                # Update chart data
+                json_data["CHARTS"][idx - 1]["data"] = {
+                    "count": count
+                }
+
+            elif chart_type == "trend_line":
+                st.markdown(f"**{chart_title}**")
+                dates = []
+                values = []
+                for date, value in zip(chart.get("data", {}).get("dates", []), chart.get("data", {}).get("values", [])):
+                    new_date = st.text_input(f"Date for {date}", value=date, key=f"graph_{idx}_date_{date}")
+                    new_value = st.number_input(
+                        f"Value for {new_date}",
+                        value=float(value),
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.1,
+                        key=f"graph_{idx}_value_{date}"
+                    )
+                    dates.append(new_date)
+                    values.append(new_value)
+                # Update chart data
+                json_data["CHARTS"][idx - 1]["data"] = {
+                    "dates": dates,
+                    "values": values
+                }
+
+            elif chart_type == "stacked_percentage":
+                st.markdown(f"**{chart_title}**")
+                categories = []
+                percentages = []
+                for i, (category, percentage) in enumerate(zip(chart.get("data", {}).get("categories", []), chart.get("data", {}).get("percentages", [])), start=1):
+                    new_category = st.text_input(f"Category {i}", value=category, key=f"graph_{idx}_category_{i}")
+                    new_percentage = st.number_input(
+                        f"Percentage for {new_category}",
+                        value=float(percentage),
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.1,
+                        key=f"graph_{idx}_percentage_{i}"
+                    )
+                    categories.append(new_category)
+                    percentages.append(new_percentage)
+                # Update chart data
+                json_data["CHARTS"][idx - 1]["data"] = {
+                    "categories": categories,
+                    "percentages": percentages
+                }
+
+            else:
+                print(f"Chart type '{chart_type}' is not supported for editing.")
+
+    elif section_name == "Page 5: Aims":
+        st.header("Page 5: Aims")
+        st.text_area("Aims (one per line)", value="\n".join(json_data.get("AIMS", [])), key="aims")
         json_data["AIMS"] = [a.strip() for a in st.session_state.aims.split("\n") if a.strip()]
+
+    elif section_name == "Page 6: Methods":
+        st.header("Page 6: Methods")
+        st.text_area("Methods", value=json_data.get("Methods", ""), key="methods")
         json_data["Methods"] = st.session_state.methods
+
+    elif section_name == "Page 7: Results":
+        st.header("Page 7: Results")
+        st.text_area("Findings (one per line)", value="\n".join(json_data.get("Findings", [])), key="findings")
         json_data["Findings"] = [f.strip() for f in st.session_state.findings.split("\n") if f.strip()]
+
+    elif section_name == "Page 8: Conclusions":
+        st.header("Page 8: Conclusions")
+        st.text_area("Conclusion", value=json_data.get("Conclusion", ""), key="conclusion")
         json_data["Conclusion"] = st.session_state.conclusion
 
     return json_data
-
-@st.cache_resource
-def load_ppt_template(template_path):
-    return Presentation(template_path)
-
 def show_chart_previews(json_data):
     """
-    Create & show all charts in Streamlit, if any, using st.pyplot(fig).
+    Display previews of the charts defined in the JSON data.
     """
-    charts = json_data.get("CHARTS", [])
-    if not charts:
-        st.info("No charts found in JSON.")
-        return
-
-    for i, chart_info in enumerate(charts, start=1):
-        if not chart_info:
-            st.warning(f"Chart #{i} is missing.")
-            continue
-
-        chart_type = chart_info.get("chart_type", "")
-        chart_title = chart_info.get("chart_title", "")
-        data = chart_info.get("data", {})
-
-        fig = None
+    st.header("Chart Previews")
+    for idx, chart in enumerate(json_data.get("CHARTS", []), start=1):
+        st.subheader(f"Chart #{idx}: {chart.get('chart_title', 'No Title')}")
+        chart_type = chart.get("chart_type", "")
+        data = chart.get("data", {})
         if chart_type == "donut":
-            fig, _ = create_percentage_donut(data.get("percentage", 50), chart_title)
-        elif chart_type == "patient_count":
-            fig, _ = create_patient_count_visualization(data.get("count", 0), chart_title)
-        elif chart_type == "comparison_bars":
-            fig, _ = create_comparison_bars(data.get("values", []), data.get("labels", []), chart_title)
-        elif chart_type == "trend_line":
-            fig, _ = create_trend_line(data.get("values", []), data.get("dates", []), chart_title)
-        elif chart_type == "stacked_percentage":
-            fig, _ = create_stacked_percentage(data.get("categories", []), data.get("percentages", []), chart_title)
-        else:
-            st.warning(f"Chart type '{chart_type}' is not recognized. Skipping chart #{i}.")
-            continue
-
-        if fig is not None:
-            st.markdown(f"#### Chart Preview #{i}: {chart_type}")
+            labels = [item["category"] for item in data]
+            sizes = [item["value"] for item in data]
+            fig, ax = plt.subplots()
+            ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=COLORS_MPL[:len(labels)])
+            ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
             st.pyplot(fig)
+
+        elif chart_type == "comparison_bars":
+            labels = data.get("labels", [])
+            values = data.get("values", [])
+            fig, ax = plt.subplots()
+            ax.bar(labels, values, color=COLORS_MPL[0])  # Using primary color
+            ax.set_title(chart.get("chart_title", "Bar Chart"))
+            ax.set_ylabel("Values")
+            st.pyplot(fig)
+
+        elif chart_type == "trend_line":
+            categories = data.get("dates", [])
+            values = data.get("values", [])
+            fig, ax = plt.subplots()
+            ax.plot(categories, values, marker='o', color=COLORS_MPL[0])  # Using primary color
+            ax.set_title(chart.get("chart_title", "Line Chart"))
+            ax.set_xlabel("Dates")
+            ax.set_ylabel("Values")
+            st.pyplot(fig)
+
+        elif chart_type == "stacked_percentage":
+            categories = data.get("categories", [])
+            percentages = data.get("percentages", [])
+            fig, ax = plt.subplots()
+            ax.pie(percentages, labels=categories, autopct='%1.1f%%', startangle=140, colors=COLORS_MPL[:len(categories)])
+            ax.axis('equal')
+            ax.set_title(chart.get("chart_title", "Stacked Percentage Chart"))
+            st.pyplot(fig)
+
+        elif chart_type == "patient_count":
+            count = data.get("count", 0)
+            fig, ax = plt.subplots(figsize=(4, 3))
+            ax.text(0.5, 0.5, str(count), fontsize=48, ha='center', va='center', color=COLORS_MPL[0])
+            ax.set_title(chart.get("chart_title", "Patient Count"), fontsize=14)
+            ax.axis('off')
+            st.pyplot(fig)
+
         else:
-            st.warning(f"Chart #{i} could not be created.")
+            print(f"Chart type '{chart_type}' is not supported for preview.")
 
 def main():
     display_logo()
-    st.markdown('<h1 class="main-title">Let’s create your presentation</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 style="text-align: center; color: white;">Let’s Create Your Presentation</h1>', unsafe_allow_html=True)
 
     # Session states
     if "json_data" not in st.session_state:
@@ -513,12 +704,9 @@ def main():
     if "ppt_file" not in st.session_state:
         st.session_state.ppt_file = None
     if "current_section" not in st.session_state:
-        st.session_state.current_section = "Paper Information"
+        st.session_state.current_section = "Page 1: Title and Author Names"
 
-    # Load your prompt from graphprompt.txt
     prompt_text = load_prompt_text(GRAPH_PROMPT_PATH)
-    TEMPLATE_PATH = "Template.pptx"
-
     uploaded_pdf = st.file_uploader("Upload your PDF file", type="pdf")
 
     # Simplification level
@@ -533,27 +721,38 @@ def main():
         pdf_bytes = uploaded_pdf.read()
 
         if st.button("Let’s Peel"):
-            with st.spinner("Information peeling"):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+            # Remove the spinner and use loading status
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-                def update_progress(step_description, pct):
-                    progress_bar.progress(pct)
-                    status_text.text(step_description)
+            def update_progress(step_description, pct):
+                progress_bar.progress(pct)
+                status_text.text(step_description)
 
-                # Call Claude with the PDF + prompt
-                st.session_state.json_data = generate_json_using_claude(
-                    prompt_text,
-                    pdf_bytes,
-                    simplification_level,
-                    progress_callback=update_progress
-                )
-                if st.session_state.json_data:
-                    st.success("JSON data generated successfully!")
+            # Call Claude with the PDF + prompt
+            st.session_state.json_data = generate_json_using_claude(
+                prompt_text,
+                pdf_bytes,
+                simplification_level,
+                progress_callback=update_progress
+            )
+            if st.session_state.json_data:
+                progress_bar.progress(100)
+                status_text.text("Peeling Complete!")
+                st.success("Initial Peeling Complete!")
 
     # If we have JSON in the session
     if st.session_state.json_data:
-        sections = ["Paper Information", "Background", "Patient Information", "Research Details"]
+        sections = [
+            "Page 1: Title and Author Names",
+            "Page 2: Background",
+            "Page 3: Patient Quote",
+            "Page 4: Key Statistics",
+            "Page 5: Aims",
+            "Page 6: Methods",
+            "Page 7: Results",
+            "Page 8: Conclusions"
+        ]
         st.session_state.current_section = st.radio(
             "Select section to edit:",
             sections,
@@ -561,20 +760,30 @@ def main():
         )
 
         # Let user edit
+        json_data_before = st.session_state.json_data.copy()
         st.session_state.json_data = edit_json_section(
             st.session_state.json_data,
             st.session_state.current_section
         )
 
-        # Let user preview charts in Streamlit
+        # Let user preview charts in Streamlit (optional)
         if st.checkbox("Show Chart Previews"):
-            show_chart_previews(st.session_state.json_data)
+            try:
+                show_chart_previews(st.session_state.json_data)
+            except AttributeError as e:
+                st.error(f"Error in chart previews: {e}")
 
-        # Finally, generate PPT
+        # Generate PPT
         if st.button("Generate PowerPoint"):
-            with st.spinner("Generating PowerPoint..."):
-                prs = load_ppt_template(TEMPLATE_PATH)
-                st.session_state.ppt_file = populate_ppt_template(st.session_state.json_data, prs)
+            # Remove the spinner and use loading status
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            status_text.text("Generating PowerPoint...")
+
+            # Update progress manually inside populate_ppt_template if needed
+            st.session_state.ppt_file = populate_ppt_template(st.session_state.json_data, load_ppt_template(TEMPLATE_PATH))
+            progress_bar.progress(100)
+            status_text.text("PowerPoint Generated!")
             st.success("PowerPoint generated successfully!")
 
     # If PPT is generated, show download button
